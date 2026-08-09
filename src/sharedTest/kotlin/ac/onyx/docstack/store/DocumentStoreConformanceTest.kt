@@ -38,7 +38,8 @@ public abstract class DocumentStoreConformanceTest {
         body: Map<String, Any?>? = mapOf("hello" to id),
         tree: OpaqueRevTree = "tree:$id:$rev",
         attachmentDigests: List<String>? = null,
-    ) = WriteOp(id, rev, tree, winningRev, deleted, body, attachmentDigests)
+        expectedPrevWinningRev: String? = null,
+    ) = WriteOp(id, rev, tree, winningRev, deleted, body, attachmentDigests, expectedPrevWinningRev)
 
     @Test
     public fun bulkWrite_isOneAtomicUnit_withContiguousIncreasingSequenceRange(): Unit = runTest {
@@ -49,7 +50,7 @@ public abstract class DocumentStoreConformanceTest {
         )
 
         assertEquals(3, results.size)
-        val seqs = results.map { it.seq }
+        val seqs = results.map { it!!.seq }
         assertEquals("sequence should already be increasing in result order", seqs.sorted(), seqs)
         assertEquals("sequences must be unique", seqs.toSet().size, seqs.size)
         assertEquals("sequence range must be contiguous", (seqs.size - 1).toLong(), seqs.last() - seqs.first())
@@ -60,7 +61,7 @@ public abstract class DocumentStoreConformanceTest {
         val store = createStore()
         val first = store.bulkWrite("db1", listOf(writeOp("doc1", "1-a")))
         val second = store.bulkWrite("db1", listOf(writeOp("doc2", "1-a")))
-        assertTrue(second.first().seq > first.first().seq)
+        assertTrue(second.first()!!.seq > first.first()!!.seq)
     }
 
     @Test
@@ -91,7 +92,7 @@ public abstract class DocumentStoreConformanceTest {
     public fun allDocs_withIncludeConflicts_returnsNonWinningLeafRevisions(): Unit = runTest {
         val store = createStore()
         store.bulkWrite("db1", listOf(writeOp("doc1", "1-a", winningRev = "1-a")))
-        store.bulkWrite("db1", listOf(writeOp("doc1", "1-b", winningRev = "1-b")))
+        store.bulkWrite("db1", listOf(writeOp("doc1", "1-b", winningRev = "1-b", expectedPrevWinningRev = "1-a")))
 
         val result = store.allDocs("db1", AllDocsOptions(includeConflicts = true))
         val row = result.rows.single { it.id == "doc1" }
@@ -104,7 +105,7 @@ public abstract class DocumentStoreConformanceTest {
     public fun compact_deletesNamedRevisionBodies_andStoresTheRewrittenTree(): Unit = runTest {
         val store = createStore()
         store.bulkWrite("db1", listOf(writeOp("doc1", "1-a", winningRev = "1-a")))
-        store.bulkWrite("db1", listOf(writeOp("doc1", "1-b", winningRev = "1-b")))
+        store.bulkWrite("db1", listOf(writeOp("doc1", "1-b", winningRev = "1-b", expectedPrevWinningRev = "1-a")))
 
         store.compact("db1", "doc1", listOf("1-a"), tree = "tree:doc1:compacted")
 
@@ -120,6 +121,58 @@ public abstract class DocumentStoreConformanceTest {
         assertEquals("1-b", current.rev)
         val trees = store.getRevTrees("db1", listOf("doc1"))
         assertEquals("tree:doc1:compacted", trees.single().tree)
+    }
+
+    @Test
+    public fun info_docCount_excludesDocsWhoseWinningRevisionIsDeleted(): Unit = runTest {
+        val store = createStore()
+        store.bulkWrite(
+            "db1",
+            listOf(writeOp("doc1", "1-a"), writeOp("doc2", "1-a"), writeOp("doc3", "1-a")),
+        )
+        assertEquals(3, store.info("db1").docCount)
+
+        store.bulkWrite("db1", listOf(writeOp("doc1", "2-b", deleted = true, expectedPrevWinningRev = "1-a")))
+        assertEquals("a deleted doc's winning revision must not count", 2, store.info("db1").docCount)
+    }
+
+    @Test
+    public fun bulkWrite_rejectsAnOp_whoseExpectedPrevWinningRevHasGoneStale(): Unit = runTest {
+        val store = createStore()
+        store.bulkWrite("db1", listOf(writeOp("doc1", "1-a")))
+
+        // Two "writers" that both read the doc before either wrote - only the one
+        // whose expectation still matches may commit; the other lost the race.
+        val results = store.bulkWrite(
+            "db1",
+            listOf(
+                writeOp("doc1", "2-b", expectedPrevWinningRev = "1-a"),
+                writeOp("doc1", "2-c", expectedPrevWinningRev = "1-a"),
+            ),
+        )
+
+        assertEquals("2-b", results[0]?.rev)
+        assertEquals("the second writer's assumption was stale by the time its op ran", null, results[1])
+        assertEquals("2-b", store.getDoc("db1", "doc1").rev)
+    }
+
+    @Test
+    public fun bulkWrite_chainsSequentialEditsToTheSameId_withinOneBatch(): Unit = runTest {
+        val store = createStore()
+
+        // A single batch can legally contain more than one edit to the same id
+        // (real replication payloads do this) - the second op's expectation is
+        // against the first op's write, not the pre-batch state.
+        val results = store.bulkWrite(
+            "db1",
+            listOf(
+                writeOp("doc1", "1-a", expectedPrevWinningRev = null),
+                writeOp("doc1", "2-b", expectedPrevWinningRev = "1-a"),
+            ),
+        )
+
+        assertTrue("both ops touch the same id but chain correctly, so both apply", results.all { it != null })
+        assertEquals("2-b", store.getDoc("db1", "doc1").rev)
     }
 
     @Test
@@ -139,7 +192,7 @@ public abstract class DocumentStoreConformanceTest {
     public fun subscribeChanges_replaysMissedWrites_thenContinuesLive_noGapOrDuplicate(): Unit = runTest {
         val store = createStore()
         val before = store.bulkWrite("db1", listOf(writeOp("doc1", "1-a")))
-        val sinceSeq = before.first().seq - 1 // subscribe from just before the first write
+        val sinceSeq = before.first()!!.seq - 1 // subscribe from just before the first write
 
         val collected = mutableListOf<StoredDoc>()
         val collector = launch {

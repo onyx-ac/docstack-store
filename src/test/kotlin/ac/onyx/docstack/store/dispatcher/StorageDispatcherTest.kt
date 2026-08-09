@@ -101,6 +101,25 @@ public class StorageDispatcherTest {
     }
 
     @Test
+    fun `bulkWrite reports a stale expectedPrevWinningRev as null, positionally`() = runTest {
+        val dispatcher = StorageDispatcher(InMemoryDocumentStore())
+        dispatcher.dispatch(request("bulkWrite", JsonPrimitive("db1"), JsonArray(listOf(writeOpJson("doc1", "1-a")))))
+
+        // Both ops assume the same pre-write state - only one may win.
+        val ops = JsonArray(
+            listOf(
+                writeOpJson("doc1", "2-b", expectedPrevWinningRev = "1-a"),
+                writeOpJson("doc1", "2-c", expectedPrevWinningRev = "1-a"),
+            ),
+        )
+        val response = ok(dispatcher.dispatch(request("bulkWrite", JsonPrimitive("db1"), ops)))
+        val results = response.value.jsonArray
+        assertEquals(2, results.size)
+        assertEquals("2-b", results[0].jsonObject.getValue("rev").jsonPrimitive.content)
+        assertEquals(JsonNull, results[1])
+    }
+
+    @Test
     fun `allDocs with default options returns every non-deleted doc`() = runTest {
         val dispatcher = StorageDispatcher(InMemoryDocumentStore())
         dispatcher.dispatch(
@@ -151,7 +170,7 @@ public class StorageDispatcherTest {
         val store = InMemoryDocumentStore()
         val dispatcher = StorageDispatcher(store)
         dispatcher.dispatch(request("bulkWrite", JsonPrimitive("db1"), JsonArray(listOf(writeOpJson("doc1", "1-a")))))
-        dispatcher.dispatch(request("bulkWrite", JsonPrimitive("db1"), JsonArray(listOf(writeOpJson("doc1", "1-b")))))
+        dispatcher.dispatch(request("bulkWrite", JsonPrimitive("db1"), JsonArray(listOf(writeOpJson("doc1", "1-b", expectedPrevWinningRev = "1-a")))))
 
         val response = ok(
             dispatcher.dispatch(
@@ -281,15 +300,16 @@ public class StorageDispatcherTest {
         assertEquals(expected, StorageDispatcher.DISPATCHED_METHODS)
     }
 
-    private fun writeOpJson(id: String, rev: String) = JsonObject(
-        mapOf(
-            "id" to JsonPrimitive(id),
-            "rev" to JsonPrimitive(rev),
-            "tree" to JsonPrimitive("tree:$id:$rev"),
-            "winningRev" to JsonPrimitive(rev),
-            "deleted" to JsonPrimitive(false),
-            "body" to JsonObject(mapOf("hello" to JsonPrimitive(id))),
-        ),
+    private fun writeOpJson(id: String, rev: String, expectedPrevWinningRev: String? = null) = JsonObject(
+        buildMap {
+            put("id", JsonPrimitive(id))
+            put("rev", JsonPrimitive(rev))
+            put("tree", JsonPrimitive("tree:$id:$rev"))
+            put("winningRev", JsonPrimitive(rev))
+            put("deleted", JsonPrimitive(false))
+            put("body", JsonObject(mapOf("hello" to JsonPrimitive(id))))
+            if (expectedPrevWinningRev != null) put("expectedPrevWinningRev", JsonPrimitive(expectedPrevWinningRev))
+        },
     )
 
     /** Suspends [DocumentStore.getDoc] on [gate] forever; every other member is
@@ -303,7 +323,7 @@ public class StorageDispatcherTest {
             error("unreachable")
         }
         override suspend fun getRevTrees(db: String, ids: List<String>): List<RevTreeEntry> = error("unused")
-        override suspend fun bulkWrite(db: String, ops: List<WriteOp>): List<WriteResult> = error("unused")
+        override suspend fun bulkWrite(db: String, ops: List<WriteOp>): List<WriteResult?> = error("unused")
         override suspend fun allDocs(db: String, options: AllDocsOptions): AllDocsResult = error("unused")
         override suspend fun changes(db: String, options: ChangesOptions): ChangesResult = error("unused")
         override fun subscribeChanges(db: String, since: Long): Flow<StoredDoc> = error("unused")

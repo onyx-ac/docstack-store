@@ -203,7 +203,7 @@ public class RocksDbDocumentStore(private val baseDir: File) : DocumentStore {
             d.rocksDb.newIterator(d.handles.docs).use { it ->
                 it.seekToFirst()
                 while (it.isValid) {
-                    count++
+                    if (!json.decodeFromString<DocsValue>(String(it.value(), Charsets.UTF_8)).deleted) count++
                     it.next()
                 }
             }
@@ -247,22 +247,37 @@ public class RocksDbDocumentStore(private val baseDir: File) : DocumentStore {
         }
     }
 
-    override suspend fun bulkWrite(db: String, ops: List<WriteOp>): List<WriteResult> {
+    override suspend fun bulkWrite(db: String, ops: List<WriteOp>): List<WriteResult?> {
         val d = dbFor(db)
         return mutex.withLock {
             withContext(Dispatchers.IO) {
                 val batch = WriteBatch()
-                val results = ArrayList<WriteResult>(ops.size)
+                val results = ArrayList<WriteResult?>(ops.size)
+                // A batch that touches the same id twice (e.g. two edits to one doc in
+                // one _bulkDocs call) must have the second op see the first op's write -
+                // but the batch isn't committed to RocksDB until the end, so reads
+                // within this loop go through this map first, not straight to the DB.
+                val pending = HashMap<String, DocsValue?>()
                 try {
                     for (op in ops) {
+                        val existing = if (pending.containsKey(op.id)) {
+                            pending[op.id]
+                        } else {
+                            d.rocksDb.get(d.handles.docs, idKey(op.id))?.let {
+                                json.decodeFromString<DocsValue>(String(it, Charsets.UTF_8))
+                            }
+                        }
+                        if (existing?.winningRev != op.expectedPrevWinningRev) {
+                            results += null
+                            continue
+                        }
                         val seq = d.seqCounter.incrementAndGet()
-                        val existingBytes = d.rocksDb.get(d.handles.docs, idKey(op.id))
-                        if (existingBytes != null) {
-                            val existing = json.decodeFromString<DocsValue>(String(existingBytes, Charsets.UTF_8))
+                        if (existing != null) {
                             batch.delete(d.handles.seq, seqKey(existing.seq))
                         }
                         val docsValue = DocsValue(winningRev = op.winningRev, seq = seq, deleted = op.deleted)
                         batch.put(d.handles.docs, idKey(op.id), json.encodeToString(docsValue).toByteArray(Charsets.UTF_8))
+                        pending[op.id] = docsValue
 
                         val revsValue = RevsValue(
                             body = op.body?.toJsonElement(),

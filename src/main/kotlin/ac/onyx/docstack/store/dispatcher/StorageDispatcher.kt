@@ -204,6 +204,7 @@ private fun decodeWriteOp(element: JsonElement): WriteOp {
         deleted = o.require("deleted").jsonPrimitive.boolean,
         body = o["body"].asBodyOrNull(),
         attachmentDigests = o["attachmentDigests"].asStringListOrNull(),
+        expectedPrevWinningRev = o["expectedPrevWinningRev"].asStringOrNull(),
     )
 }
 
@@ -271,9 +272,14 @@ private fun encodeRevTreeEntry(entry: RevTreeEntry): JsonElement = JsonObject(
     ),
 )
 
-private fun encodeWriteResult(result: WriteResult): JsonElement = JsonObject(
-    mapOf("id" to JsonPrimitive(result.id), "rev" to JsonPrimitive(result.rev), "seq" to JsonPrimitive(result.seq)),
-)
+/** `null` means that op's [WriteOp.expectedPrevWinningRev] had gone stale by write time. */
+private fun encodeWriteResult(result: WriteResult?): JsonElement = if (result == null) {
+    JsonNull
+} else {
+    JsonObject(
+        mapOf("id" to JsonPrimitive(result.id), "rev" to JsonPrimitive(result.rev), "seq" to JsonPrimitive(result.seq)),
+    )
+}
 
 private fun encodeAllDocsResult(result: AllDocsResult): JsonElement = JsonObject(
     mapOf(

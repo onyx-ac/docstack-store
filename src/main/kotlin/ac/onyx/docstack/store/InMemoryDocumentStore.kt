@@ -67,7 +67,8 @@ public class InMemoryDocumentStore : DocumentStore {
 
     override suspend fun info(db: String): StoreInfo {
         val database = existingDb(db) ?: return StoreInfo(docCount = 0, updateSeq = 0)
-        return StoreInfo(docCount = database.docs.size, updateSeq = database.seqCounter.get())
+        val docCount = database.docs.values.count { it.winningRevision?.deleted != true }
+        return StoreInfo(docCount = docCount, updateSeq = database.seqCounter.get())
     }
 
     override suspend fun getDoc(db: String, id: String, rev: String?): StoredDoc {
@@ -96,12 +97,16 @@ public class InMemoryDocumentStore : DocumentStore {
         }
     }
 
-    override suspend fun bulkWrite(db: String, ops: List<WriteOp>): List<WriteResult> = mutex.withLock {
+    override suspend fun bulkWrite(db: String, ops: List<WriteOp>): List<WriteResult?> = mutex.withLock {
         val database = dbForWrite(db)
-        val results = ArrayList<WriteResult>(ops.size)
+        val results = ArrayList<WriteResult?>(ops.size)
         for (op in ops) {
-            val seq = database.seqCounter.incrementAndGet()
             val existing = database.docs[op.id]
+            if (existing?.winningRev != op.expectedPrevWinningRev) {
+                results += null
+                continue
+            }
+            val seq = database.seqCounter.incrementAndGet()
             if (existing != null) {
                 database.bySeq.remove(existing.seq)
             }
