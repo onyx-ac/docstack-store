@@ -102,6 +102,33 @@ public abstract class DocumentStoreConformanceTest {
     }
 
     @Test
+    public fun allDocs_totalRows_isTheWholeDatabasesNonDeletedCount_regardlessOfQuery(): Unit = runTest {
+        val store = createStore()
+        store.bulkWrite(
+            "db1",
+            (0 until 10).map { writeOp("doc-%02d".format(it), "1-a") },
+        )
+        store.bulkWrite("db1", listOf(writeOp("doc-03", "2-b", deleted = true, expectedPrevWinningRev = "1-a")))
+
+        assertEquals("no query restriction", 9, store.allDocs("db1", AllDocsOptions()).totalRows)
+        assertEquals(
+            "startkey/endkey must not change total_rows",
+            9,
+            store.allDocs("db1", AllDocsOptions(startkey = "doc-05")).totalRows,
+        )
+        assertEquals(
+            "keys must not change total_rows",
+            9,
+            store.allDocs("db1", AllDocsOptions(keys = listOf("doc-00", "doc-03"))).totalRows,
+        )
+        assertEquals(
+            "skip/limit must not change total_rows",
+            9,
+            store.allDocs("db1", AllDocsOptions(skip = 2, limit = 1)).totalRows,
+        )
+    }
+
+    @Test
     public fun compact_deletesNamedRevisionBodies_andStoresTheRewrittenTree(): Unit = runTest {
         val store = createStore()
         store.bulkWrite("db1", listOf(writeOp("doc1", "1-a", winningRev = "1-a")))
