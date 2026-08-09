@@ -8,15 +8,23 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 /**
  * Runs against every [DocumentStore] implementation — in-memory here, the
  * RocksDB-backed one (spec 02 task 4) later — per `docstack-store/CLAUDE.md`:
  * "The in-memory and engine implementations run the same suite." Covers spec 02's
  * "Semantics that must hold."
+ *
+ * Lives in `src/sharedTest`, wired into both the `test` (JVM) and `androidTest`
+ * (on-device) source sets in `build.gradle.kts`, because the RocksDB-backed subclass
+ * only runs on-device (native `.so`) while the in-memory one only needs the plain
+ * JVM. Plain JUnit 4, not Jupiter: Android instrumented tests don't support JUnit 5
+ * without extra tooling this project isn't otherwise using, and JUnit 4 runs
+ * unmodified in both places, so this one abstract class serves both engines with
+ * zero duplication.
  */
 public abstract class DocumentStoreConformanceTest {
 
@@ -33,7 +41,7 @@ public abstract class DocumentStoreConformanceTest {
     ) = WriteOp(id, rev, tree, winningRev, deleted, body, attachmentDigests)
 
     @Test
-    fun `bulkWrite is one atomic unit with a contiguous increasing sequence range`() = runTest {
+    public fun bulkWrite_isOneAtomicUnit_withContiguousIncreasingSequenceRange(): Unit = runTest {
         val store = createStore()
         val results = store.bulkWrite(
             "db1",
@@ -42,13 +50,13 @@ public abstract class DocumentStoreConformanceTest {
 
         assertEquals(3, results.size)
         val seqs = results.map { it.seq }
-        assertEquals(seqs.sorted(), seqs, "sequence should already be increasing in result order")
-        assertEquals(seqs.toSet().size, seqs.size, "sequences must be unique")
-        assertEquals((seqs.size - 1).toLong(), seqs.last() - seqs.first(), "sequence range must be contiguous")
+        assertEquals("sequence should already be increasing in result order", seqs.sorted(), seqs)
+        assertEquals("sequences must be unique", seqs.toSet().size, seqs.size)
+        assertEquals("sequence range must be contiguous", (seqs.size - 1).toLong(), seqs.last() - seqs.first())
     }
 
     @Test
-    fun `sequences are monotonic across multiple bulkWrite calls`() = runTest {
+    public fun sequences_areMonotonic_acrossMultipleBulkWriteCalls(): Unit = runTest {
         val store = createStore()
         val first = store.bulkWrite("db1", listOf(writeOp("doc1", "1-a")))
         val second = store.bulkWrite("db1", listOf(writeOp("doc2", "1-a")))
@@ -56,7 +64,7 @@ public abstract class DocumentStoreConformanceTest {
     }
 
     @Test
-    fun `allDocs completes correctly while writes land underneath it`() = runBlocking {
+    public fun allDocs_completesCorrectly_whileWritesLandUnderneathIt(): Unit = runBlocking {
         // Real threads (Dispatchers.Default), not runTest's virtual scheduler -
         // the point is exercising genuine concurrent mutation against the
         // lock-free read path, not just logically-interleaved coroutines on one
@@ -74,13 +82,13 @@ public abstract class DocumentStoreConformanceTest {
         val result = reader.await()
 
         val ids = result.rows.map { it.id }
-        assertEquals(ids.distinct().size, ids.size, "no duplicate ids")
-        assertEquals(ids.sorted(), ids, "allDocs must return lexically ordered ids")
-        assertTrue(result.rows.size >= initialCount, "must see at least the pre-existing documents")
+        assertEquals("no duplicate ids", ids.distinct().size, ids.size)
+        assertEquals("allDocs must return lexically ordered ids", ids.sorted(), ids)
+        assertTrue("must see at least the pre-existing documents", result.rows.size >= initialCount)
     }
 
     @Test
-    fun `allDocs with includeConflicts returns non-winning leaf revisions`() = runTest {
+    public fun allDocs_withIncludeConflicts_returnsNonWinningLeafRevisions(): Unit = runTest {
         val store = createStore()
         store.bulkWrite("db1", listOf(writeOp("doc1", "1-a", winningRev = "1-a")))
         store.bulkWrite("db1", listOf(writeOp("doc1", "1-b", winningRev = "1-b")))
@@ -93,7 +101,7 @@ public abstract class DocumentStoreConformanceTest {
     }
 
     @Test
-    fun `compact deletes named revision bodies and stores the rewritten tree`() = runTest {
+    public fun compact_deletesNamedRevisionBodies_andStoresTheRewrittenTree(): Unit = runTest {
         val store = createStore()
         store.bulkWrite("db1", listOf(writeOp("doc1", "1-a", winningRev = "1-a")))
         store.bulkWrite("db1", listOf(writeOp("doc1", "1-b", winningRev = "1-b")))
@@ -106,7 +114,7 @@ public abstract class DocumentStoreConformanceTest {
         } catch (e: NoSuchElementException) {
             threw = true
         }
-        assertTrue(threw, "compacted revision must no longer be retrievable")
+        assertTrue("compacted revision must no longer be retrievable", threw)
 
         val current = store.getDoc("db1", "doc1")
         assertEquals("1-b", current.rev)
@@ -115,7 +123,7 @@ public abstract class DocumentStoreConformanceTest {
     }
 
     @Test
-    fun `destroy is idempotent and scoped to its own db`() = runTest {
+    public fun destroy_isIdempotent_andScopedToItsOwnDb(): Unit = runTest {
         val store = createStore()
         store.bulkWrite("db1", listOf(writeOp("doc1", "1-a")))
         store.bulkWrite("db2", listOf(writeOp("doc1", "1-a")))
@@ -124,11 +132,11 @@ public abstract class DocumentStoreConformanceTest {
         store.destroy("db1") // second call must not throw
 
         assertEquals(0, store.info("db1").docCount)
-        assertEquals(1, store.info("db2").docCount, "an untouched db must be unaffected")
+        assertEquals("an untouched db must be unaffected", 1, store.info("db2").docCount)
     }
 
     @Test
-    fun `subscribeChanges replays missed writes then continues live, with no gap or duplicate`() = runTest {
+    public fun subscribeChanges_replaysMissedWrites_thenContinuesLive_noGapOrDuplicate(): Unit = runTest {
         val store = createStore()
         val before = store.bulkWrite("db1", listOf(writeOp("doc1", "1-a")))
         val sinceSeq = before.first().seq - 1 // subscribe from just before the first write
@@ -146,6 +154,6 @@ public abstract class DocumentStoreConformanceTest {
 
         val ids = collected.map { it.id }
         assertEquals(listOf("doc1", "doc2", "doc3"), ids)
-        assertEquals(ids.distinct(), ids, "no duplicate across the replay/live join point")
+        assertEquals("no duplicate across the replay/live join point", ids.distinct(), ids)
     }
 }

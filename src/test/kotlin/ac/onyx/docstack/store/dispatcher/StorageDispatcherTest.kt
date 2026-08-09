@@ -30,9 +30,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 /**
  * Round-trips every [StorageDispatcher.DISPATCHED_METHODS] entry through real JSON
@@ -45,12 +45,12 @@ public class StorageDispatcherTest {
         BridgeRequest(v = 1, id = "req-1", capability = "storage", method = method, args = args.toList())
 
     private fun ok(response: BridgeResponse): BridgeResponse.Ok {
-        assertTrue(response is BridgeResponse.Ok, "expected Ok, got $response")
+        assertTrue("expected Ok, got $response", response is BridgeResponse.Ok)
         return response as BridgeResponse.Ok
     }
 
     private fun err(response: BridgeResponse): BridgeResponse.Err {
-        assertTrue(response is BridgeResponse.Err, "expected Err, got $response")
+        assertTrue("expected Err, got $response", response is BridgeResponse.Err)
         return response as BridgeResponse.Err
     }
 
@@ -253,7 +253,7 @@ public class StorageDispatcherTest {
         yield()
         job.cancelAndJoin()
 
-        assertTrue(caught is CancellationException, "expected dispatch to propagate cancellation, got $caught")
+        assertTrue("expected dispatch to propagate cancellation, got $caught", caught is CancellationException)
     }
 
     @Test

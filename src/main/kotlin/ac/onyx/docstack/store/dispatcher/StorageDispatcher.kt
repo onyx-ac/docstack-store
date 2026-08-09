@@ -12,6 +12,8 @@ import ac.onyx.docstack.store.StoreInfo
 import ac.onyx.docstack.store.StoredDoc
 import ac.onyx.docstack.store.WriteOp
 import ac.onyx.docstack.store.WriteResult
+import ac.onyx.docstack.store.toJsonElement
+import ac.onyx.docstack.store.toKotlin
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.JsonArray

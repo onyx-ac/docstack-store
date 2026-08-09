@@ -1,4 +1,4 @@
-package ac.onyx.docstack.store.dispatcher
+package ac.onyx.docstack.store
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -10,11 +10,13 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.doubleOrNull
 
 /**
- * Doc bodies are `Map<String, Any?>` ([ac.onyx.docstack.store.DocumentStore] never
- * interprets their structure), so they cannot round-trip through
- * kotlinx.serialization's data-class (de)serialization the way [BridgeError] or
- * [BridgeRequest] do. These two functions are the manual bridge between arbitrary
- * JSON and the `Any?` shape [DocumentStore]'s methods actually take and return.
+ * Doc bodies are `Map<String, Any?>` ([DocumentStore] never interprets their
+ * structure), so they cannot round-trip through kotlinx.serialization's data-class
+ * (de)serialization the way a fixed-shape record can. These two functions are the
+ * manual bridge between arbitrary JSON and the `Any?` shape [DocumentStore]'s
+ * methods actually take and return. Shared by the dispatcher (wire encoding) and the
+ * RocksDB engine (value encoding) — the same conversion, two independent reasons to
+ * need it, not dispatcher-specific.
  */
 public fun JsonElement.toKotlin(): Any? = when (this) {
     is JsonNull -> null
