@@ -1,0 +1,9 @@
+# Gradle (gradle-wrapper.jar itself is committed, per the wrapper convention)
+.gradle/
+**/build/
+
+# Kotlin compiler daemon/session state
+.kotlin/
+
+# Local machine SDK path - never portable, never committed
+local.properties
