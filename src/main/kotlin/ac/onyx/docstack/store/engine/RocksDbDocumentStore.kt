@@ -302,10 +302,27 @@ public class RocksDbDocumentStore(private val baseDir: File) : DocumentStore {
     override suspend fun allDocs(db: String, options: AllDocsOptions): AllDocsResult {
         val d = dbFor(db)
         return withContext(Dispatchers.IO) {
-            val all: List<Pair<String, DocsValue>> = if (options.keys != null) {
-                options.keys.mapNotNull { key ->
+            // total_rows is always the whole database's non-deleted doc count,
+            // independent of any startkey/endkey/keys restriction - matches
+            // CouchDB's own _all_docs semantics (only `rows`/`offset` are affected
+            // by the query). The non-keys branch below already does a full scan for
+            // its own filtering, so it computes this from that instead of scanning
+            // twice; the keys branch has no such scan, so it does one here.
+            val all: List<Pair<String, DocsValue>>
+            val totalRows: Int
+            if (options.keys != null) {
+                all = options.keys.mapNotNull { key ->
                     d.rocksDb.get(d.handles.docs, idKey(key))?.let { key to json.decodeFromString<DocsValue>(String(it, Charsets.UTF_8)) }
                 }
+                var count = 0
+                d.rocksDb.newIterator(d.handles.docs).use { it ->
+                    it.seekToFirst()
+                    while (it.isValid) {
+                        if (!json.decodeFromString<DocsValue>(String(it.value(), Charsets.UTF_8)).deleted) count++
+                        it.next()
+                    }
+                }
+                totalRows = count
             } else {
                 val scanned = mutableListOf<Pair<String, DocsValue>>()
                 d.rocksDb.newIterator(d.handles.docs).use { it ->
@@ -315,6 +332,7 @@ public class RocksDbDocumentStore(private val baseDir: File) : DocumentStore {
                         it.next()
                     }
                 }
+                totalRows = scanned.count { !it.second.deleted }
                 var filtered = scanned.asSequence()
                 if (options.startkey != null) filtered = filtered.filter { it.first >= options.startkey }
                 if (options.endkey != null) {
@@ -325,11 +343,10 @@ public class RocksDbDocumentStore(private val baseDir: File) : DocumentStore {
                     }
                 }
                 val list = filtered.toList()
-                if (options.descending) list.reversed() else list
+                all = if (options.descending) list.reversed() else list
             }
 
             val filtered = all.filter { (_, value) -> options.deleted || !value.deleted }
-            val totalRows = filtered.size
             val skipped = filtered.drop(options.skip)
             val paged = if (options.limit != null) skipped.take(options.limit) else skipped
 

@@ -154,7 +154,10 @@ public class InMemoryDocumentStore : DocumentStore {
             options.deleted || !winningDeleted
         }
 
-        val totalRows = filtered.size
+        // total_rows is always the whole database's non-deleted doc count,
+        // independent of any startkey/endkey/keys restriction - matches CouchDB's
+        // own _all_docs semantics (only `rows`/`offset` are affected by the query).
+        val totalRows = database.docs.values.count { it.winningRevision?.deleted != true }
         val skipped = filtered.drop(options.skip)
         val paged = if (options.limit != null) skipped.take(options.limit) else skipped
 
