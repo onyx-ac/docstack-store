@@ -24,6 +24,11 @@ public data class StoredDoc(
     public val conflicts: List<String>? = null,
 )
 
+public data class LocalDoc(
+    public val rev: String,
+    public val body: Map<String, Any?>,
+)
+
 public data class RevTreeEntry(
     public val id: String,
     public val tree: OpaqueRevTree?,
@@ -135,12 +140,22 @@ public interface DocumentStore {
     /** Deletes bodies for the given revisions and stores the rewritten tree, in one transaction. */
     public suspend fun compact(db: String, id: String, revs: List<String>, tree: OpaqueRevTree)
 
-    public suspend fun getLocal(db: String, id: String): Map<String, Any?>?
+    /** null when no such local doc exists. */
+    public suspend fun getLocal(db: String, id: String): LocalDoc?
 
-    /** Returns the new rev. */
-    public suspend fun putLocal(db: String, id: String, doc: Map<String, Any?>): String
+    /**
+     * Returns the new rev, formatted `"0-N"` (matching PouchDB/CouchDB's own
+     * local-doc convention). [prevRev] omitted means the doc must not already
+     * exist. Throws [IllegalStateException] if [prevRev] doesn't match the
+     * currently stored rev - including "expected a rev, found none" and vice
+     * versa. Unlike regular docs, native decides this conflict itself: local
+     * docs never replicate, so ADR-0001's "native never decides revision
+     * semantics" doesn't apply to them.
+     */
+    public suspend fun putLocal(db: String, id: String, doc: Map<String, Any?>, prevRev: String? = null): String
 
-    public suspend fun removeLocal(db: String, id: String)
+    /** Throws [IllegalStateException] on a [prevRev] mismatch, [NoSuchElementException] if no such local doc exists. */
+    public suspend fun removeLocal(db: String, id: String, prevRev: String)
 
     /**
      * Attachment bodies use a binary side-channel, not the JSON envelope — see

@@ -156,4 +156,42 @@ public abstract class DocumentStoreConformanceTest {
         assertEquals(listOf("doc1", "doc2", "doc3"), ids)
         assertEquals("no duplicate across the replay/live join point", ids.distinct(), ids)
     }
+
+    @Test
+    public fun putLocal_andRemoveLocal_detectConflictingWrites(): Unit = runTest {
+        val store = createStore()
+
+        val rev1 = store.putLocal("db1", "local1", mapOf("k" to "v1"))
+        assertEquals("0-1", rev1)
+
+        var threwOnStalePut = false
+        try {
+            store.putLocal("db1", "local1", mapOf("k" to "v2")) // prevRev omitted, but a doc already exists
+        } catch (e: IllegalStateException) {
+            threwOnStalePut = true
+        }
+        assertTrue("put without the current rev must conflict", threwOnStalePut)
+
+        val rev2 = store.putLocal("db1", "local1", mapOf("k" to "v2"), rev1)
+        assertEquals("0-2", rev2)
+
+        var threwOnStaleRemove = false
+        try {
+            store.removeLocal("db1", "local1", rev1) // stale rev
+        } catch (e: IllegalStateException) {
+            threwOnStaleRemove = true
+        }
+        assertTrue("remove with a stale rev must conflict", threwOnStaleRemove)
+
+        store.removeLocal("db1", "local1", rev2)
+        assertEquals(null, store.getLocal("db1", "local1"))
+
+        var threwOnMissingRemove = false
+        try {
+            store.removeLocal("db1", "local1", rev2)
+        } catch (e: NoSuchElementException) {
+            threwOnMissingRemove = true
+        }
+        assertTrue("remove of an already-removed doc must throw not-found", threwOnMissingRemove)
+    }
 }

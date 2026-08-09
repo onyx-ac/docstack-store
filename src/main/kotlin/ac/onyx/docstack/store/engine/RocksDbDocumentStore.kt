@@ -6,6 +6,7 @@ import ac.onyx.docstack.store.BulkGetRequest
 import ac.onyx.docstack.store.ChangesOptions
 import ac.onyx.docstack.store.ChangesResult
 import ac.onyx.docstack.store.DocumentStore
+import ac.onyx.docstack.store.LocalDoc
 import ac.onyx.docstack.store.OpaqueRevTree
 import ac.onyx.docstack.store.RevTreeEntry
 import ac.onyx.docstack.store.RevsDiffEntry
@@ -451,24 +452,27 @@ public class RocksDbDocumentStore(private val baseDir: File) : DocumentStore {
         }
     }
 
-    override suspend fun getLocal(db: String, id: String): Map<String, Any?>? {
+    override suspend fun getLocal(db: String, id: String): LocalDoc? {
         val d = dbFor(db)
         return withContext(Dispatchers.IO) {
             val bytes = d.rocksDb.get(d.handles.local, idKey(id)) ?: return@withContext null
+            val value = json.decodeFromString<LocalValue>(String(bytes, Charsets.UTF_8))
             @Suppress("UNCHECKED_CAST")
-            json.decodeFromString<LocalValue>(String(bytes, Charsets.UTF_8)).body.toKotlin() as? Map<String, Any?>
+            LocalDoc(value.rev, value.body.toKotlin() as Map<String, Any?>)
         }
     }
 
-    override suspend fun putLocal(db: String, id: String, doc: Map<String, Any?>): String {
+    override suspend fun putLocal(db: String, id: String, doc: Map<String, Any?>, prevRev: String?): String {
         val d = dbFor(db)
         return mutex.withLock {
             withContext(Dispatchers.IO) {
-                val existing = d.rocksDb.get(d.handles.local, idKey(id))
-                val existingRevNumber = existing?.let {
-                    json.decodeFromString<LocalValue>(String(it, Charsets.UTF_8)).rev.substringBefore('-').toIntOrNull()
-                } ?: 0
-                val rev = "${existingRevNumber + 1}-local"
+                val existingBytes = d.rocksDb.get(d.handles.local, idKey(id))
+                val existing = existingBytes?.let { json.decodeFromString<LocalValue>(String(it, Charsets.UTF_8)) }
+                if (existing?.rev != prevRev) {
+                    throw IllegalStateException("local doc conflict: $db/$id (expected rev $prevRev, found ${existing?.rev})")
+                }
+                val nextRevNumber = (existing?.rev?.substringAfter('-')?.toIntOrNull() ?: 0) + 1
+                val rev = "0-$nextRevNumber"
                 val value = LocalValue(rev = rev, body = doc.toJsonElement())
                 d.rocksDb.put(d.handles.local, idKey(id), json.encodeToString(value).toByteArray(Charsets.UTF_8))
                 rev
@@ -476,10 +480,18 @@ public class RocksDbDocumentStore(private val baseDir: File) : DocumentStore {
         }
     }
 
-    override suspend fun removeLocal(db: String, id: String) {
+    override suspend fun removeLocal(db: String, id: String, prevRev: String) {
         val d = dbFor(db)
         mutex.withLock {
-            withContext(Dispatchers.IO) { d.rocksDb.delete(d.handles.local, idKey(id)) }
+            withContext(Dispatchers.IO) {
+                val existingBytes = d.rocksDb.get(d.handles.local, idKey(id))
+                    ?: throw NoSuchElementException("local doc not found: $db/$id")
+                val existing = json.decodeFromString<LocalValue>(String(existingBytes, Charsets.UTF_8))
+                if (existing.rev != prevRev) {
+                    throw IllegalStateException("local doc conflict: $db/$id (expected rev $prevRev, found ${existing.rev})")
+                }
+                d.rocksDb.delete(d.handles.local, idKey(id))
+            }
         }
     }
 

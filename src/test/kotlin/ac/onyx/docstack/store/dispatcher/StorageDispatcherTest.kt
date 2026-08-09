@@ -7,6 +7,7 @@ import ac.onyx.docstack.store.ChangesOptions
 import ac.onyx.docstack.store.ChangesResult
 import ac.onyx.docstack.store.DocumentStore
 import ac.onyx.docstack.store.InMemoryDocumentStore
+import ac.onyx.docstack.store.LocalDoc
 import ac.onyx.docstack.store.OpaqueRevTree
 import ac.onyx.docstack.store.RevTreeEntry
 import ac.onyx.docstack.store.RevsDiffEntry
@@ -175,22 +176,34 @@ public class StorageDispatcherTest {
         val body = JsonObject(mapOf("k" to JsonPrimitive("v")))
 
         val putResponse = ok(dispatcher.dispatch(request("putLocal", JsonPrimitive("db1"), JsonPrimitive("local1"), body)))
-        assertEquals("1-local", putResponse.value.jsonPrimitive.content)
+        assertEquals("0-1", putResponse.value.jsonPrimitive.content)
 
         val getResponse = ok(dispatcher.dispatch(request("getLocal", JsonPrimitive("db1"), JsonPrimitive("local1"))))
-        assertEquals("v", getResponse.value.jsonObject.getValue("k").jsonPrimitive.content)
+        val getBody = getResponse.value.jsonObject
+        assertEquals("0-1", getBody.getValue("rev").jsonPrimitive.content)
+        assertEquals("v", getBody.getValue("body").jsonObject.getValue("k").jsonPrimitive.content)
     }
 
     @Test
     fun `removeLocal clears the doc`() = runTest {
         val dispatcher = StorageDispatcher(InMemoryDocumentStore())
-        dispatcher.dispatch(request("putLocal", JsonPrimitive("db1"), JsonPrimitive("local1"), JsonObject(emptyMap())))
+        val putResponse = ok(dispatcher.dispatch(request("putLocal", JsonPrimitive("db1"), JsonPrimitive("local1"), JsonObject(emptyMap()))))
+        val rev = putResponse.value.jsonPrimitive.content
 
-        val removeResponse = ok(dispatcher.dispatch(request("removeLocal", JsonPrimitive("db1"), JsonPrimitive("local1"))))
+        val removeResponse = ok(dispatcher.dispatch(request("removeLocal", JsonPrimitive("db1"), JsonPrimitive("local1"), JsonPrimitive(rev))))
         assertEquals(JsonNull, removeResponse.value)
 
         val getResponse = ok(dispatcher.dispatch(request("getLocal", JsonPrimitive("db1"), JsonPrimitive("local1"))))
         assertEquals(JsonNull, getResponse.value)
+    }
+
+    @Test
+    fun `putLocal without the current rev maps IllegalStateException to CONFLICT`() = runTest {
+        val dispatcher = StorageDispatcher(InMemoryDocumentStore())
+        dispatcher.dispatch(request("putLocal", JsonPrimitive("db1"), JsonPrimitive("local1"), JsonObject(emptyMap())))
+
+        val response = err(dispatcher.dispatch(request("putLocal", JsonPrimitive("db1"), JsonPrimitive("local1"), JsonObject(emptyMap()))))
+        assertEquals(BridgeErrorCode.CONFLICT, response.error.code)
     }
 
     @Test
@@ -297,9 +310,9 @@ public class StorageDispatcherTest {
         override suspend fun revsDiff(db: String, revsByDocId: Map<String, List<String>>): Map<String, RevsDiffEntry> = error("unused")
         override suspend fun bulkGet(db: String, requests: List<BulkGetRequest>): List<StoredDoc> = error("unused")
         override suspend fun compact(db: String, id: String, revs: List<String>, tree: OpaqueRevTree) = error("unused")
-        override suspend fun getLocal(db: String, id: String): Map<String, Any?>? = error("unused")
-        override suspend fun putLocal(db: String, id: String, doc: Map<String, Any?>): String = error("unused")
-        override suspend fun removeLocal(db: String, id: String) = error("unused")
+        override suspend fun getLocal(db: String, id: String): LocalDoc? = error("unused")
+        override suspend fun putLocal(db: String, id: String, doc: Map<String, Any?>, prevRev: String?): String = error("unused")
+        override suspend fun removeLocal(db: String, id: String, prevRev: String) = error("unused")
         override suspend fun getAttachment(db: String, digest: String): ByteArray = error("unused")
         override suspend fun putAttachment(db: String, digest: String, data: ByteArray) = error("unused")
         override suspend fun destroy(db: String) = error("unused")

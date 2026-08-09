@@ -104,18 +104,21 @@ public class StorageDispatcher(private val store: DocumentStore) {
                     JsonNull
                 }
 
-                "getLocal" -> store.getLocal(request.args[0].asString(), request.args[1].asString()).toJsonElement()
+                "getLocal" -> store.getLocal(request.args[0].asString(), request.args[1].asString())?.let {
+                    JsonObject(mapOf("rev" to JsonPrimitive(it.rev), "body" to it.body.toJsonElement()))
+                } ?: JsonNull
 
                 "putLocal" -> JsonPrimitive(
                     store.putLocal(
                         request.args[0].asString(),
                         request.args[1].asString(),
                         request.args[2].asBodyOrNull() ?: emptyMap(),
+                        request.args.getOrNull(3).asStringOrNull(),
                     ),
                 )
 
                 "removeLocal" -> {
-                    store.removeLocal(request.args[0].asString(), request.args[1].asString())
+                    store.removeLocal(request.args[0].asString(), request.args[1].asString(), request.args[2].asString())
                     JsonNull
                 }
 
@@ -144,6 +147,8 @@ public class StorageDispatcher(private val store: DocumentStore) {
             return BridgeResponse.Err(request.v, request.id, BridgeError(BridgeErrorCode.NOT_FOUND, e.message ?: "not found"))
         } catch (e: IllegalArgumentException) {
             return BridgeResponse.Err(request.v, request.id, BridgeError(BridgeErrorCode.INVALID_ARGUMENT, e.message ?: "invalid argument"))
+        } catch (e: IllegalStateException) {
+            return BridgeResponse.Err(request.v, request.id, BridgeError(BridgeErrorCode.CONFLICT, e.message ?: "conflict"))
         } catch (e: Exception) {
             return BridgeResponse.Err(request.v, request.id, BridgeError(BridgeErrorCode.INTERNAL, e.message ?: "internal error"))
         }

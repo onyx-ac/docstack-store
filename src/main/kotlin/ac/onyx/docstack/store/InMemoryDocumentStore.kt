@@ -243,18 +243,28 @@ public class InMemoryDocumentStore : DocumentStore {
         database.docs[id] = existing.copy(tree = tree, revisions = remainingRevisions)
     }
 
-    override suspend fun getLocal(db: String, id: String): Map<String, Any?>? = existingDb(db)?.local?.get(id)?.body
+    override suspend fun getLocal(db: String, id: String): LocalDoc? =
+        existingDb(db)?.local?.get(id)?.let { LocalDoc(it.rev, it.body) }
 
-    override suspend fun putLocal(db: String, id: String, doc: Map<String, Any?>): String = mutex.withLock {
+    override suspend fun putLocal(db: String, id: String, doc: Map<String, Any?>, prevRev: String?): String = mutex.withLock {
         val database = dbForWrite(db)
-        val nextRevNumber = (database.local[id]?.rev?.substringBefore('-')?.toIntOrNull() ?: 0) + 1
-        val rev = "$nextRevNumber-local"
+        val existing = database.local[id]
+        if (existing?.rev != prevRev) {
+            throw IllegalStateException("local doc conflict: $db/$id (expected rev $prevRev, found ${existing?.rev})")
+        }
+        val nextRevNumber = (existing?.rev?.substringAfter('-')?.toIntOrNull() ?: 0) + 1
+        val rev = "0-$nextRevNumber"
         database.local[id] = LocalRecord(rev, doc)
         rev
     }
 
-    override suspend fun removeLocal(db: String, id: String): Unit = mutex.withLock {
-        existingDb(db)?.local?.remove(id)
+    override suspend fun removeLocal(db: String, id: String, prevRev: String): Unit = mutex.withLock {
+        val database = existingDb(db) ?: throw NoSuchElementException("local doc not found: $db/$id")
+        val existing = database.local[id] ?: throw NoSuchElementException("local doc not found: $db/$id")
+        if (existing.rev != prevRev) {
+            throw IllegalStateException("local doc conflict: $db/$id (expected rev $prevRev, found ${existing.rev})")
+        }
+        database.local.remove(id)
         Unit
     }
 
